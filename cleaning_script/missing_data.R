@@ -18,6 +18,8 @@ library(ggplot2)
 # LOAD DATA ---------------------------------------------------------------
 data <- read_csv("../clean_data/suicide_data.csv")
 
+data <- data %>% mutate(country_year = paste0(country, year))
+
 first_year_country <- data[!duplicated(data$country),]$country_year
 
 #remove first year/instance of a country so that they wouldn't be sampled out; need baseline suicide rate
@@ -33,7 +35,7 @@ mcar_data[which(is.na(mcar_data$suicides_no)),]
 
 # MAR ---------------------------------------------------------------------
 
-#use the 1st quartile for annual gdp as a threshold for removing data
+# sample to remove data using different probs based off quartile of gdp_per_year
 data_subset$gdp_quartile <- cut(data_subset$gdp_for_year, quantile(data_subset$gdp_for_year), labels = c("0-25","25-50","50-75","75-100"))
 
 mar_sampling <- function(quartile, num_sample){
@@ -51,6 +53,16 @@ mar_dat_country_year <- c(mar_data_0_25,mar_data_25_50,mar_data_50_75,mar_data_7
 mar_data <- data
 mar_data$suicides_no[which(mar_data$country_year %in% mar_dat_country_year)] <- NA
 mar_data[which(is.na(mar_data$suicides_no)),]
+
+data <- data %>% 
+  select(country_year, suicides_no) %>% 
+  rename(suicides_no_org = suicides_no)
+
+mar_data <- mar_data %>% 
+  left_join(data, by = c("country_year")) 
+mcar_data <- mcar_data %>% 
+  left_join(data, by = c("country_year"))
+
 # OUTPUT DATA -------------------------------------------------------------
 
 write_csv(mcar_data, "../clean_data/mcar_data.csv")
