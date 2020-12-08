@@ -1,6 +1,6 @@
 #########################
 # Title: BST 222 Project 
-# Purpose: Use Last value carried forward and propensity score matching for multiple imputation of missing values
+# Purpose: Use Last value carried forward, propensity score matching, and regression imputation for missing values
 #########################
 
 
@@ -16,12 +16,16 @@ library(ggplot2)
 library(zoo)
 library(mice)
 library(lme4)
+library(rstudioapi)
 
+getActiveDocumentContext()$path
+working_path <- dirname(getActiveDocumentContext()$path)
+setwd(working_path)
 
 # LOAD DATA ---------------------------------------------------------------
 
-mcar_data <- read_csv("../clean_data/mcar_data.csv")
-mar_data <- read_csv("../clean_data/mar_data.csv")
+mcar_data <- read_csv("clean_data/mcar_data.csv")
+mar_data <- read_csv("clean_data/mar_data.csv")
 
 # CLEAN DATA --------------------------------------------------------------
 
@@ -44,7 +48,6 @@ lvcf_mar_data <- na.locf(mar_data)
 # http://www.asasrms.org/Proceedings/y2004/files/Jsm2004-000368.pdf
 
 ps_match <- function(data) {
-  
   # run logistic regression of covariates on missing indicator & get predicted probs
   logit <- glm(missing_ind ~ year + factor(country) + population + gdp_for_year + female + mean_age, family="binomial", data=data)
   ps <- predict(logit, type="response")
@@ -79,7 +82,6 @@ ps_match <- function(data) {
     suicides_no_imp[i] <- imp
     
   }
-  
   data_missing$suicides_no_imp <- suicides_no_imp
   
   # join imputed suicide number values to full data frame
@@ -107,6 +109,41 @@ ps_mcar_data <- mcar_ps$ps_data
 mar_ps <- ps_match(mar_data)
 ps_mar_data <- mar_ps$ps_data
 
+# # DETERMINISTIC REGRESSION IMPUTATION VIA MICE  --------------------------------------------------
+#https://datascienceplus.com/imputing-missing-data-with-r-mice-package/
+#https://stats.stackexchange.com/questions/421545/multiple-imputation-by-chained-equations-mice-explained
+
+imp_mcar <- mice(mcar_data %>% select(suicides_no,mean_age,gdp_per_capita,female,year,country),group="country", method = "norm.predict", m = 1)
+imp_mar <- mice(mar_data %>% select(suicides_no,mean_age,gdp_per_capita,female,year,country), group="country",method = "norm.predict", m = 1)
+# Store data
+data_imp_mcar <- complete(imp_mcar)
+data_imp_mar <- complete(imp_mar)
+
+impute_mcar_df <- mcar_data %>% select(suicides_no,mean_age,gdp_per_capita,female,year,country)
+impute_mar_df <- mar_data %>% select(suicides_no,mean_age,gdp_per_capita,female,year,country)
+
+#remove Cabo Verde, Dominica, Macau; only has 1 row
+impute_mcar_df <- impute_mcar_df %>% filter(!country %in% c("Cabo Verde","Dominica","Macau"))
+impute_mar_df <- impute_mar_df %>% filter(!country %in% c("Cabo Verde","Dominica","Macau"))
+
+#https://stackoverflow.com/questions/58801562/combine-imputed-data-by-group-in-r-using-mice
+impute_mcar.clean<-lapply(split(impute_mcar_df,impute_mcar_df$country), function(x){
+                   print(x$country)
+                   mice::complete(mice(x,m=1,method = "norm.predict",))
+                  }
+          )
+impute_mar.clean<-lapply(split(impute_mar_df,impute_mcar_df$country), function(x){
+  print(x$country)
+  mice::complete(mice(x,m=1,method = "norm.predict",))
+}
+)
+
+data_impute_mcar <- do.call(args = impute_mcar.clean, what = rbind)
+data_impute_mar <- do.call(args = impute_mar.clean, what = rbind)
+
+#check that there's no missing data in imputed dataset
+data_impute_mcar %>% filter(is.na(data_impute_mcar$suicides_no)) #Bosnia and Herzegovina only has 2 rows
+data_impute_mcar %>% filter(is.na(data_impute_mar$suicides_no)) 
 
 # CALCULATE MSE -----------------------------------------------------------
 
@@ -130,6 +167,7 @@ mar_mse_lvcf <- mean((mar_lvcf_suicides_no_imp - mar_lvcf_suicides_no_org)^2)
 # ps method
 mcar_mse_ps <- mcar_ps$mse_ps
 mar_mse_ps <- mar_ps$mse_ps
+
 
 # comparison
 mse_comp <- rbind(cbind(mcar_mse_lvcf, mar_mse_lvcf), cbind(mcar_mse_ps, mar_mse_ps))
