@@ -126,7 +126,38 @@ augment_missing <- function(df){
   
 }
 
-delta_var_diff <- function(){
+delta_var_diff <- function(df, yr1, yr2){
+  # df -> grouped year/gdp quartile, avg_suicide, avg_I
+  # var(X_yr2 - X_yr1) = var(X_yr2) + var(X_yr1) - 2Cov(X_yr1, X_yr2)
+  
+  # implementation of formula (4)
+  calc_stats <- function(yr){
+    year_stats <- df %>% filter(year == yr) %>% summarise(y_bar = mean(avg_suicide),
+                                             x_bar = mean(avg_I),
+                                             y_var = var(avg_suicide),
+                                             x_var = var(avg_I),
+                                             xy_cov = cov(avg_suicide, avg_I),
+                                             n = n())
+    return(year_stats)
+    
+  }
+  
+  calc_var_ratio <- function(stats){
+            (stats$y_var - 
+            2*stats$y_bar/stats$x_bar*stats$xy_cov + 
+            (stats$y_bar**2/stats$x_bar**2)*stats$x_var)/(stats$n*stats$x_bar)
+  }
+  
+  
+  stats_1 = calc_stats(yr1)
+  stats_2 =  calc_stats(yr2)
+  
+  # covariance
+  t_1 = df %>% filter(year == yr1) %>% mutate(x = avg_suicide/avg_I) %>% .$x
+  t_2 =  df %>% filter(year == yr2) %>% mutate(x = avg_suicide/avg_I) %>% .$x
+  covar = cov(t_1, t_2)
+  
+  return(calc_var_ratio(stats_1) + calc_var_ratio(stats_2) -2*covar)
   
 }
 
