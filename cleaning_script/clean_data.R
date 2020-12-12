@@ -67,5 +67,9 @@ sex_dist <- sex_dist %>%
 
 sui_agg <- sui_agg %>% left_join(age_dist, by=c('country', 'year')) %>% left_join(sex_dist, by=c('country', 'year')) %>% select(everything(),-male)
 
+# Remove 2016 data
+sui_agg <- sui_agg %>% 
+  filter(year != 2016)
+
 # OUTPUT DATA -------------------------------------------------------------
 write_csv(sui_agg, "../clean_data/suicide_data.csv")
