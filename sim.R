@@ -15,7 +15,7 @@ library(ggplot2)
 
 
 # LOAD DATA ---------------------------------------------------------------
-data <- read_csv("../clean_data/suicide_data.csv")
+data <- read_csv("./clean_data/suicide_data.csv")
 
 data <- data %>% mutate(country_year = paste0(country, year))
 
@@ -25,7 +25,8 @@ first_year_country <- data[!duplicated(data$country),]$country_year
 data_subset <- data[-which(data$country_year %in% first_year_country),]
 
 # sample to remove data using different probs based off quartile of gdp_per_year
-data_subset$gdp_quartile <- cut(data_subset$gdp_for_year, quantile(data_subset$gdp_for_year), labels = c("0-25","25-50","50-75","75-100"))
+data_subset$gdp_quartile <- cut(data_subset$gdp_for_year, quantile(data_subset$gdp_for_year), 
+                                labels = c("0-25","25-50","50-75","75-100"))
 
 
 # SIMULATION FUNCTIONS ----------------------------------------------------
@@ -83,7 +84,9 @@ mk_mar <- function(df, quart_n) {
     rename(suicides_no_org = suicides_no)
   
   mar_data <- mar_data %>% 
-    left_join(data_og, by = c("country_year")) 
+    left_join(data_og, by = c("country_year"))  %>% 
+    mutate(gdp_quartile = cut(gdp_for_year, quantile(gdp_for_year), 
+                          labels = c("0-25","25-50","50-75","75-100")))
 
   
   return(mar_data)
@@ -108,6 +111,24 @@ var_within_yr <- function(df) {
 }
 
 # ii. Delta method variance
+augment_missing <- function(df){
+  df <- df %>% mutate(I = ifelse(is.na(suicides_no), 0, 1) )
+  df$suicides_no[which(is.na(df$suicides_no))] <- 0
+  
+  year_means <- df %>% group_by(year, gdp_quartile) %>% summarise(
+                      tot_suicide =sum(suicides_no), 
+                      tot_I = sum(I), 
+                      n = n())
+  year_means <- year_means %>% mutate(avg_suicide = tot_suicide/n,
+                                      avg_I = tot_I/n)
+  return(year_means %>% select(c(year, gdp_quartile, avg_suicide, avg_I)))
+    
+  
+}
+
+delta_var_diff <- function(){
+  
+}
 
 # B. Covariance
 
@@ -118,6 +139,10 @@ cov_within_two_years <- function(df, yr1, yr2) {
   df %>% filter(year == yr1) %>% pull(suicides_no),
   df %>% filter(year == yr2) %>% pull(suicides_no)) %>% 
     return()
+}
+
+calc_MSE <- function(df) {
+  mean((df$suicides_no - df$suicides_no_org)^2)
 }
 
 # ii. Other methods?
