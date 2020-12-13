@@ -14,12 +14,7 @@ gc(reset = TRUE)
 library(tidyverse)
 library(ggplot2)
 library(zoo)
-library(mice)
-library(micemd)
 library(lme4)
-library(blme)
-library(rstudioapi)
-library(optimx)
 
 getActiveDocumentContext()$path
 working_path <- dirname(getActiveDocumentContext()$path)
@@ -46,7 +41,7 @@ mcar_data <- mcar_data %>% filter(year != 2016)
 lvcf_mcar_data <- na.locf(mcar_data)
 lvcf_mar_data <- na.locf(mar_data)
 
-# General Linear Mixed Model ----------------------------------------------
+# GENERAL LINEAR MIXED MODEL ----------------------------------------------
 
 #View slopes of different United States
 ggplot(mcar_data %>% filter(country %in% c("Albania","United States","Sweden","Spain","San Marino")), 
@@ -77,6 +72,31 @@ glmm_intercept_func <- function(df){
 mcar_glmm_df <- glmm_intercept_func(mcar_data)
 mar_glmm_df <- glmm_intercept_func(mar_data)
 
+# MEAN IMPUTATION ---------------------------------------------------------
+
+# mean imputation conditioned on year
+# take mean suicide rate of a specific time point and impute any missing value at that time point with that mean
+mean_impute <- function(df) {
+  
+  df <- df %>% mutate(suicide_rate = suicides_no/population*100000)
+  years <- 1985:2015
+  
+  for (curr_year in years) {
+    
+    mean <- df %>% 
+      filter(year == curr_year) %>% 
+      pull(suicide_rate) %>% 
+      mean(na.rm = TRUE)
+    
+    df$suicide_rate[df$year == curr_year & is.na(df$suicide_rate)] <- mean
+  }
+  
+  return(df)
+  
+}
+
+mcar_mean_impute_df <- mean_impute(mcar_data)
+mar_mean_impute_df <- mean_impute(mar_data)
 
 
 
