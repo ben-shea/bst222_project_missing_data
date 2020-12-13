@@ -115,14 +115,48 @@ lvcf <- function(df) {
     return()
 } 
 
-# ii. mean value
-mean_val <- function(df) {
-  
-}
+# ii. mean impute
+mean_impute <- function(df) {
+    years <- 1985:2015
+    
+    for (curr_year in years) {
+      
+      mean <- df %>% 
+        filter(year == curr_year) %>% 
+        pull(suicides_no) %>% 
+        mean(na.rm = TRUE)
+      
+      df$suicides_no[df$year == curr_year & is.na(df$suicides_no)] <- mean
+    }
+    
+    return(df)
+    
+ }
+
 
 # iii. GLMM
-glmm <- function(df) {
+glmm <- function(df){
+  #convert suicide no to rates per 100, scale year and gdp_per_capita
+  df <- df %>% mutate(scaled_year = scale(year),
+                      scaled_gdp_per_capita = scale(gdp_per_capita))
   
+  missing_model_intercept <- lmer(suicides_no ~ scaled_year + scaled_gdp_per_capita+(1|country), data= df)
+  missing_data_df <- df %>% filter(is.na(suicides_no))
+  
+  #generalized linear mixed model for random effect for intercept
+  missing_model_intercept <- lmer(suicides_no ~ scaled_year + scaled_gdp_per_capita+(1|country), data= df)
+  
+  #predict rows with missing values
+  fitted_values <- lme4:::predict.merMod(missing_model_intercept,missing_data_df %>% 
+                                           dplyr::select(country,scaled_year, scaled_gdp_per_capita))
+  #add year and country to fitted values to merge back into mcar dataset
+  df$filled_suicide_rate <- df$suicides_no
+  df$filled_suicide_rate[which(is.na(df$filled_suicide_rate))] <-fitted_values
+  df <- df %>% 
+    mutate(
+      suicides_no = filled_suicide_rate
+    ) %>% select(-filled_suicide_rate)
+  return(df)
 } 
 
 # iv. KNN 
@@ -198,12 +232,21 @@ sim <- function(N = 100, perc_missing = 0.25) {
     mar <- mk_mar(data,  rows_to_rm, i)
     
     # Impute values
+    # LVCF
     impute_mcar_lvcf <- lvcf(mcar)
     impute_mar_lvcf <- lvcf(mar)
     
+    # GLMM
+    impute_mcar_glmm <- glmm(mcar)
+    impute_mar_glmm <- glmm(mar)
+    
+    # Mean impute
+    impute_mcar_mean <- mean_impute(mcar)
+    impute_mar_mean <- mean_impute(mar)
     
     # Get Root MSE
     root_mse <-  bind_rows(root_mse,
+                           # LVCF
                            data.frame(
                              sim_run = perc_missing,
                              ind = i,
@@ -217,8 +260,37 @@ sim <- function(N = 100, perc_missing = 0.25) {
                              impute_type = "Last Value Carried Forward",
                              missing_type = "MAR",
                              rmse = root_MSE(impute_mar_lvcf)
-                           )
-                           ### Add in other methods
+                           ),
+                           # GLMM
+                           data.frame(
+                             sim_run = perc_missing,
+                             ind = i,
+                             impute_type = "General Linear Mixed Model",
+                             missing_type = "MCAR",
+                             rmse = root_MSE(impute_mcar_glmm)
+                           ),
+                           data.frame(
+                             sim_run = perc_missing,
+                             ind = i,
+                             impute_type = "General Linear Mixed Model",
+                             missing_type = "MAR",
+                             rmse = root_MSE(impute_mar_glmm)
+                           ),
+                           # Mean impute
+                           data.frame(
+                             sim_run = perc_missing,
+                             ind = i,
+                             impute_type = "Mean Imputation",
+                             missing_type = "MCAR",
+                             rmse = root_MSE(impute_mcar_mean)
+                           ),
+                           data.frame(
+                             sim_run = perc_missing,
+                             ind = i,
+                             impute_type = "Mean Imputation",
+                             missing_type = "MAR",
+                             rmse = root_MSE(impute_mar_mean)
+                           ),
                            )
     
     # Get variance by year
@@ -240,7 +312,7 @@ sim <- function(N = 100, perc_missing = 0.25) {
 
 ### RUN SIMULATION 
 
-percs = seq(0.1, .6, by = 0.01)
+percs = seq(0.1, .5, by = 0.01)
 
 system.time(
   sim_output <- pmap(.l = list(.x = percs), .f = ~sim(perc_missing = .x, N = 10))
@@ -258,7 +330,7 @@ rmse_df <- sim_output %>%
 rmse_df %>% 
   ggplot(aes(x = sim_run, y = avg_rmse, color = impute_type)) +
   geom_line() +
-  scale_color_discrete("Imputation Type") +
+  scale_color_manual("Imputation Type", values = RColorBrewer::brewer.pal(3, "Accent")) +
   facet_grid(missing_type ~ .) +
   xlab("% of Data Missing") + 
   ylab("Average Root MSE") + 
