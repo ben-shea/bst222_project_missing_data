@@ -16,6 +16,7 @@ library(zoo)
 library(mice)
 library(lme4)
 library(rstudioapi)
+library(caret)
 
 
 # LOAD DATA ---------------------------------------------------------------
@@ -138,10 +139,20 @@ mean_impute <- function(df) {
     
  }
 
+# method to add predicted values into missing cells
+fill_missing_data = function(df, values) {
+  df$filled_suicide_rate <- df$suicides_no
+  df$filled_suicide_rate[which(is.na(df$filled_suicide_rate))] <-values
+  df <- df %>% 
+    mutate(
+      suicides_no = filled_suicide_rate
+    ) %>% select(-filled_suicide_rate)
+  return(df)
+}
 
 # iii. GLMM
 glmm <- function(df){
-  #convert suicide no to rates per 100, scale year and gdp_per_capita
+  #scale year and gdp_per_capita
   df <- df %>% mutate(scaled_year = scale(year),
                       scaled_gdp_per_capita = scale(gdp_per_capita))
   
@@ -154,31 +165,57 @@ glmm <- function(df){
   #predict rows with missing values
   fitted_values <- lme4:::predict.merMod(missing_model_intercept,missing_data_df %>% 
                                            dplyr::select(country,scaled_year, scaled_gdp_per_capita))
-  #add year and country to fitted values to merge back into mcar dataset
-  df$filled_suicide_rate <- df$suicides_no
-  df$filled_suicide_rate[which(is.na(df$filled_suicide_rate))] <-fitted_values
-  df <- df %>% 
-    mutate(
-      suicides_no = filled_suicide_rate
-    ) %>% select(-filled_suicide_rate)
-  return(df)
+  return(fill_missing_data(df, fitted_values))
 } 
 
 # iv. KNN 
 
+# tuning function for k parameter
+hyper_tune_k <- function(train_set) {
+  set.seed(89458278)
+  trctrl <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
+  knn_fit <- train(suicides_no ~ ., data = train_set, method = "knn",
+                   trControl=trctrl,
+                   preProcess = c("center", "scale"),
+                   na.action = na.omit,
+                   tuneLength = 10)
+  knn_fit
+}
+
 # a. KNN 1
 knn1 <- function(df) {
-  
+  df = df %>% filter(year != 2016)
+  df$missing_ind <- is.na(df$suicides_no)*1
+  df_train = df %>% filter(missing_ind==0) %>%
+    select(-c('country_year', 'suicides_no', 'suicides_no_org', 'missing_ind'))
+  df_test = df %>% filter(missing_ind==1)%>%
+    select(-c('country_year', 'suicides_no', 'suicides_no_org', 'missing_ind'))
+  df_knn = hyper_tune_k(df_train)
+  preds <- predict(df_knn, newdata=df_test)
+  fill_missing_data(df, preds)
 }
 
 # b. KNN 2 
 knn2 <- function(df) {
+  df = df %>% filter(year != 2016)
+  df$missing_ind <- is.na(df$suicides_no)*1
+  previous_df = df %>% group_by('country') %>% filter(lead(missing_ind)==1) %>% 
+    mutate(year=year+1) %>% ungroup() %>% 
+    select('country', 'year', 'prev_suicides')
+  df_train = df %>% filter(missing_ind==0) %>%
+    select(-c('country_year', 'suicides_no', 'suicides_no_org', 'missing_ind'))
+  df_train = df_train %>% mutate(suicides_no = suicides_no-lag(suicides_no))
+  df_test = df %>% filter(missing_ind==1)%>%
+    select(-c('country_year', 'suicides_no', 'suicides_no_org', 'missing_ind'))
   
-}
-
-# c. KNN 3
-knn3 <- function(df) {
-  
+  df_knn = hyper_tune_k(df_train)
+  preds <- predict(df_knn, newdata=df_test)
+  for (i in c(1:nrow(df_test))) {
+    if (is.na(previous_df$prev_suicides[i]))
+      previous_df$prev_suicides[i] = preds[i-1]
+    preds[i]=preds[i]+previous_df$prev_suicides[i]
+  }
+  fill_missing_data(df, preds)
 }
 
 
