@@ -161,53 +161,62 @@ var_within_yr <- function(df) {
 }
 
 # ii. Delta method variance
-augment_missing <- function(df){
-  df <- df %>% mutate(I = ifelse(is.na(suicides_no), 0, 1) )
-  df$suicides_no[which(is.na(df$suicides_no))] <- 0
-  
-  year_means <- df %>% group_by(year, gdp_quartile) %>% summarise(
-                      tot_suicide =sum(suicides_no), 
-                      tot_I = sum(I), 
-                      n = n())
-  year_means <- year_means %>% mutate(avg_suicide = tot_suicide/n,
-                                      avg_I = tot_I/n)
-  return(year_means %>% select(c(year, gdp_quartile, avg_suicide, avg_I)))
-    
-  
-}
+# augment_missing <- function(df){
+#   df <- df %>% mutate(I = ifelse(is.na(suicides_no), 0, 1) )
+#   df$suicides_no[which(is.na(df$suicides_no))] <- 0
+#   
+#   year_means <- df %>% group_by(year, gdp_quartile) %>% summarise(
+#                       tot_suicide =sum(suicides_no), 
+#                       tot_I = sum(I), 
+#                       n = n())
+#   year_means <- year_means %>% mutate(avg_suicide = tot_suicide/n,
+#                                       avg_I = tot_I/n)
+#   return(year_means %>% select(c(year, gdp_quartile, avg_suicide, avg_I)))
+#     
+#   
+# }
 
 delta_var_diff <- function(df, yr1, yr2){
-  # df -> grouped year/gdp quartile, avg_suicide, avg_I
-  # var(X_yr2 - X_yr1) = var(X_yr2) + var(X_yr1) - 2Cov(X_yr1, X_yr2)
-  
+  # df -> imputed data frame
+
   # implementation of formula (4)
-  calc_stats <- function(yr){
-    year_stats <- df %>% filter(year == yr) %>% summarise(y_bar = mean(avg_suicide),
-                                             x_bar = mean(avg_I),
-                                             y_var = var(avg_suicide),
-                                             x_var = var(avg_I),
-                                             xy_cov = cov(avg_suicide, avg_I),
-                                             n = n())
-    return(year_stats)
+  calc_stats <- function(df, yr1, yr2){
+    year_stats <- df %>% filter(year %in% c(yr1, yr2)) %>% group_by(year) %>%
+                         summarise(y_bar = mean(suicides_no),
+                                   y_var = var(suicides_no),
+                                   n = n())
+    year_stats['xy_cov'] = cov(subset(data, year == yr1)$suicides_no,
+                                   subset(data, year == yr2)$suicides_no)
+    
+    year_stats['x_bar'] = year_stats$y_bar[1] #yr1
+    year_stats['x_var'] = year_stats$y_var[1] #yr1
+    
+    return(year_stats[2,])
     
   }
   
-  calc_var_ratio <- function(stats){
-            (stats$y_var - 
-            2*stats$y_bar/stats$x_bar*stats$xy_cov + 
-            (stats$y_bar**2/stats$x_bar**2)*stats$x_var)/(stats$n*stats$x_bar)
+  calc_ci_ratio <- function(stats){
+        se <- sqrt((stats$y_var - 
+              2*stats$y_bar/stats$x_bar*stats$xy_cov + 
+              (stats$y_bar**2/stats$x_bar**2)*stats$x_var))/(sqrt(stats$n)*stats$x_bar)
+        low <- stats$y_bar/stats$x_bar - 1.96*se
+        up <- stats$y_bar/stats$x_bar  + 1.96*se
+        ci<- c(low, up)
+        return(ci)
   }
   
   
-  stats_1 = calc_stats(yr1)
-  stats_2 =  calc_stats(yr2)
+  calc_ci_ratio2 <- function(stats){
+    se <- sqrt((stats$y_var - 
+                  2*stats$y_bar/stats$x_bar*stats$xy_cov + 
+                  (stats$y_bar**2/stats$x_bar**2)*stats$x_var))/(sqrt(stats$n)*stats$x_bar)
+    low <- stats$y_bar/stats$x_bar - 1.96*se
+    up <- stats$y_bar/stats$x_bar + 1.96*se
+    ci<- c(low, up)
+    return(ci)
+  }
   
-  # covariance
-  t_1 = df %>% filter(year == yr1) %>% mutate(x = avg_suicide/avg_I) %>% .$x
-  t_2 =  df %>% filter(year == yr2) %>% mutate(x = avg_suicide/avg_I) %>% .$x
-  covar = cov(t_1, t_2)
   
-  return(calc_var_ratio(stats_1) + calc_var_ratio(stats_2) -2*covar)
   
 }
 
