@@ -185,14 +185,14 @@ knn3 <- function(df) {
 # 3. Evaluation Functions
 # a. Variance
 
-# i. Sample variance
-var_within_yr <- function(df) {
-  df %>% 
-    group_by(year) %>% 
-    summarize(var_yr = var(suicides_no),.groups = "drop") %>% 
-    return()
-  
-}
+# # i. Sample variance
+# var_within_yr <- function(df) {
+#   df %>% 
+#     group_by(year) %>% 
+#     summarize(var_yr = var(suicides_no),.groups = "drop") %>% 
+#     return()
+#   
+# }
 
 # ii. Delta method variance
 
@@ -208,7 +208,7 @@ var_within_yr <- function(df) {
 # calculate confidence interval coverage
 # for % change across all pairs of years (e.g. 1985 & 1986,
 # 1986 * 1987)
-delta_ci_all_years <- function(df_impute, data_true){
+delta_ci_all_years <- function(df_impute, data_true = data){
   # df -> imputed data frame
 
   # implementation of formula (4) - pairwise year stats
@@ -223,7 +223,7 @@ delta_ci_all_years <- function(df_impute, data_true){
                                 (country %in% common$country)) %>% group_by(year) %>%
                          summarise(y_bar = mean(suicides_no),
                                    y_var = var(suicides_no),
-                                   n = n())
+                                   n = n(), .groups = "drop")
     year_stats['x_bar'] = year_stats$y_bar[1] #yr1
     year_stats['x_var'] = year_stats$y_var[1] #yr1
     
@@ -235,7 +235,7 @@ delta_ci_all_years <- function(df_impute, data_true){
     avgs <- data_true %>% filter(country %in% common$country &
                                    year %in% c(yr1, yr2)) %>% 
                           group_by(year) %>% 
-                          summarise(avg = mean(suicides_no)) 
+                          summarise(avg = mean(suicides_no), .groups = "drop") 
     year_stats['true_val'] = (avgs[2, 'avg']$avg - avgs[1, 'avg']$avg)/(avgs[1, 'avg']$avg)
                              
     
@@ -259,18 +259,18 @@ delta_ci_all_years <- function(df_impute, data_true){
   
 # loop through all pairs of years to calc coverage
   
-yr1 <- min(df$year):(max(df$year)-1)   
-yr2 <- (min(df$year)+1):max(df$year)   
+yr1 <- min(df_impute$year):(max(df_impute$year)-1)   
+yr2 <- (min(df_impute$year)+1):max(df_impute$year)   
 
 coverage = c()
 
 for(i in 1:(length(yr1))){
-  s <- calc_stats(df, yr1[i], yr2[i])
+  s <- calc_stats(df_impute, yr1[i], yr2[i])
   coverage <- append(coverage, calc_ci_cov(s))
   
   }
-
-return(coverage)
+# Returns proportion of ratios for which the Delta CI captured the true value
+return(sum(coverage)/length(coverage))
   
 }
 
@@ -301,14 +301,14 @@ root_MSE <- function(df) {
 
 # N is number of iterations
 # perc_missing is the percentage of observations that go missing (assuming we begin with a full dataset)
-sim <- function(N = 100, perc_missing = 0.25) {
+sim <- function(N = 10, perc_missing = 0.25) {
   
   # get the number of rows to remove
   rows_to_rm <- ceiling(nrow(data)*perc_missing)
   
   # Create empty containers for different results
   # If it's a single value per iteration, we can create dataframes 
-  var_by_yr <- list()
+  delta_ci <- data.frame(sim_run = NULL, ind = NULL, impute_type = NULL, missing_type = NULL, coverage = NULL)
   root_mse <- data.frame(sim_run = NULL, ind = NULL, impute_type = NULL, missing_type = NULL, rmse = NULL)
   for (i in 1:N) {
     print(sprintf("Running simulation %f for %f missing data", i, perc_missing))
@@ -378,29 +378,80 @@ sim <- function(N = 100, perc_missing = 0.25) {
                            ),
                            )
     
-    # Get variance by year
-    var_by_yr[["var_mcar"]] <- bind_rows(var_by_yr[["var_mcar"]], var_within_yr(impute_mcar_lvcf))
-    var_by_yr[["var_mar"]] <- bind_rows(var_by_yr[["var_mar"]], var_within_yr(impute_mcar_lvcf))
+  
+  
+  
+  # Get Delta_CI
+  delta_ci <-  bind_rows(delta_ci,
+                         # LVCF
+                         data.frame(
+                           sim_run = perc_missing,
+                           ind = i,
+                           impute_type = "Last Value Carried Forward",
+                           missing_type = "MCAR",
+                           coverage = delta_ci_all_years(impute_mcar_lvcf)
+                         ),
+                         data.frame(
+                           sim_run = perc_missing,
+                           ind = i,
+                           impute_type = "Last Value Carried Forward",
+                           missing_type = "MAR",
+                           coverage = delta_ci_all_years(impute_mar_lvcf)
+                         ),
+                         # GLMM
+                         data.frame(
+                           sim_run = perc_missing,
+                           ind = i,
+                           impute_type = "General Linear Mixed Model",
+                           missing_type = "MCAR",
+                           coverage = delta_ci_all_years(impute_mcar_glmm)
+                         ),
+                         data.frame(
+                           sim_run = perc_missing,
+                           ind = i,
+                           impute_type = "General Linear Mixed Model",
+                           missing_type = "MAR",
+                           coverage = delta_ci_all_years(impute_mar_glmm)
+                         ),
+                         # Mean impute
+                         data.frame(
+                           sim_run = perc_missing,
+                           ind = i,
+                           impute_type = "Mean Imputation",
+                           missing_type = "MCAR",
+                           coverage = delta_ci_all_years(impute_mcar_mean, data)
+                         ),
+                         data.frame(
+                           sim_run = perc_missing,
+                           ind = i,
+                           impute_type = "Mean Imputation",
+                           missing_type = "MAR",
+                           coverage = delta_ci_all_years(impute_mar_mean, data)
+                         )
+  )
   }
-  
-  # Get averages across all simulations (variance by year)
-  var_by_yr[["var_mcar"]] <- var_by_yr[["var_mcar"]] %>% group_by(year) %>% summarize(avg_var_within_yr = mean(var_yr), .groups = "drop") %>% mutate(sim_run = perc_missing)
-  
-  var_by_yr[["var_mar"]] <- var_by_yr[["var_mar"]] %>% group_by(year) %>% summarize(avg_var_within_yr = mean(var_yr), .groups = "drop") %>% mutate(sim_run = perc_missing)
-  
   # Get average RMSE for each set of simulations
-  root_mse <- root_mse %>% group_by(sim_run, impute_type, missing_type) %>% summarize(avg_rmse = mean(rmse), .groups = "drop")
+  root_mse <- root_mse %>% 
+    group_by(sim_run, impute_type, missing_type) %>% 
+    summarize(avg_rmse = mean(rmse), .groups = "drop")
   
-  return(list(var_by_yr, root_mse))
+  # Get average Delta Coverage CI for each set of simulations
+  delta_ci <- delta_ci %>% 
+    group_by(sim_run, impute_type, missing_type) %>% 
+    summarize(avg_coverage = mean(coverage), .groups = "drop")
+  
+  
+  
+  return(list(delta_ci, root_mse))
 }
 
 
 ### RUN SIMULATION 
-
-percs = seq(0.1, .5, by = 0.01)
+# 50 
+percs = seq(0.1, .6, by = 0.015)
 
 system.time(
-  sim_output <- pmap(.l = list(.x = percs), .f = ~sim(perc_missing = .x, N = 10))
+  sim_output <- pmap(.l = list(.x = percs), .f = ~sim(perc_missing = .x, N = 50))
 )
 
 
@@ -412,7 +463,7 @@ rmse_df <- sim_output %>%
   # Row bind these together
   map_df(bind_rows)
 
-rmse_df %>% 
+p1 <- rmse_df %>% 
   ggplot(aes(x = sim_run, y = avg_rmse, color = impute_type)) +
   geom_line() +
   scale_color_manual("Imputation Type", values = RColorBrewer::brewer.pal(3, "Accent")) +
@@ -422,6 +473,27 @@ rmse_df %>%
   ggtitle("Simulation: Average MSE for Different Imputation Methods") + 
   theme_bw()  
 
+
+#### Plot Delta CI
+# Combine data into one data frame
+coverage_df <- sim_output %>% 
+  # Extract the MSE output for percent missing
+  map(function(x) return(x[[1]])) %>% 
+  # Row bind these together
+  map_df(bind_rows) 
+
+p2 <- coverage_df %>% 
+  ggplot(aes(x = sim_run, y = avg_coverage, color = impute_type)) +
+  geom_line() +
+  scale_color_manual("Imputation Type", values = RColorBrewer::brewer.pal(3, "Accent")) +
+  facet_grid(missing_type ~ .) +
+  xlab("% of Data Missing") + 
+  ylab("Average 95% Delta Method CI Coverage") + 
+  ggtitle("Simulation: Average Delta Method CI Coverage for Different Imputation Methods") + 
+  theme_bw() 
+
+ggsave(p1,filename = "MSE_plot.png")
+ggsave(p2,filename = "Coverage_plot.png")
 
 
 
