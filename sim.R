@@ -19,7 +19,9 @@ library(rstudioapi)
 
 
 # LOAD DATA ---------------------------------------------------------------
+
 data <- read_csv("clean_data/suicide_data.csv")
+
 
 data <- data %>% mutate(country_year = paste0(country, year))
 
@@ -38,7 +40,8 @@ first_year_country <- data[!duplicated(data$country),]$country_year
 data_subset <- data[-which(data$country_year %in% first_year_country),]
 
 # sample to remove data using different probs based off quartile of gdp_per_year
-data_subset$gdp_quartile <- cut(data_subset$gdp_for_year, quantile(data_subset$gdp_for_year), labels = c("0-25","25-50","50-75","75-100"))
+data_subset$gdp_quartile <- cut(data_subset$gdp_for_year, quantile(data_subset$gdp_for_year), 
+                                labels = c("0-25","25-50","50-75","75-100"))
 
 
 # SIMULATION FUNCTIONS ----------------------------------------------------
@@ -96,7 +99,9 @@ mk_mar <- function(df, rows_to_rm, seed) {
     rename(suicides_no_org = suicides_no)
   
   mar_data <- mar_data %>% 
-    left_join(data_og, by = c("country_year")) 
+    left_join(data_og, by = c("country_year"))  %>% 
+    mutate(gdp_quartile = cut(gdp_for_year, quantile(gdp_for_year), 
+                          labels = c("0-25","25-50","50-75","75-100")))
 
   
   return(mar_data)
@@ -192,6 +197,84 @@ var_within_yr <- function(df) {
 # ii. Delta method variance
 
 
+# calc_true_perc_change <- function(data){
+#   
+#   df <- data %>% group_by(year) %>% summarise(avg = mean(suicides_no)) %>%
+#         mutate(perc_change =(avg - lag(avg)) / lag(avg) )
+#   
+#   df %>% drop_na() %>% pull(perc_change) %>% return()
+# }
+
+# calculate confidence interval coverage
+# for % change across all pairs of years (e.g. 1985 & 1986,
+# 1986 * 1987)
+delta_ci_all_years <- function(df_impute, data_true){
+  # df -> imputed data frame
+
+  # implementation of formula (4) - pairwise year stats
+  calc_stats <- function(df_impute, yr1, yr2){
+    
+    # limit to countries present in both yr1 & yr2 for covar calc
+    df1 <- df_impute %>% filter(year == yr1)
+    df2 <- df_impute %>% filter(year == yr2)
+    common <- df1 %>% inner_join(df2, by = c('country')) %>% select(country)
+    
+    year_stats <- df_impute %>% filter((year %in% c(yr1, yr2)) &
+                                (country %in% common$country)) %>% group_by(year) %>%
+                         summarise(y_bar = mean(suicides_no),
+                                   y_var = var(suicides_no),
+                                   n = n())
+    year_stats['x_bar'] = year_stats$y_bar[1] #yr1
+    year_stats['x_var'] = year_stats$y_var[1] #yr1
+    
+    x <- df_impute %>% filter(country %in% common$country & year == yr1) %>% pull(suicides_no)
+    y <- df_impute %>% filter(country %in% common$country & year == yr2) %>% pull(suicides_no)
+    
+    year_stats['xy_cov'] = cov(x,y)
+    
+    avgs <- data_true %>% filter(country %in% common$country &
+                                   year %in% c(yr1, yr2)) %>% 
+                          group_by(year) %>% 
+                          summarise(avg = mean(suicides_no)) 
+    year_stats['true_val'] = (avgs[2, 'avg']$avg - avgs[1, 'avg']$avg)/(avgs[1, 'avg']$avg)
+                             
+    
+    
+    return(year_stats[2,])
+    
+  }
+  
+  # confidence interval coverage for percent change estimator based on delta method (Eq 4)
+  calc_ci_cov <- function(stats){
+        se <- sqrt((stats$y_var - 
+              2*stats$y_bar/stats$x_bar*stats$xy_cov + 
+              (stats$y_bar**2/stats$x_bar**2)*stats$x_var))/(sqrt(stats$n)*stats$x_bar)
+        low <- stats$y_bar/stats$x_bar - 1 -1.96*se
+        up <- stats$y_bar/stats$x_bar  -1 + 1.96*se
+        
+        return(ifelse(stats$true_val >= low & 
+                      stats$true_val <= up, 1, 0))
+      
+  }
+  
+# loop through all pairs of years to calc coverage
+  
+yr1 <- min(df$year):(max(df$year)-1)   
+yr2 <- (min(df$year)+1):max(df$year)   
+
+coverage = c()
+
+for(i in 1:(length(yr1))){
+  s <- calc_stats(df, yr1[i], yr2[i])
+  coverage <- append(coverage, calc_ci_cov(s))
+  
+  }
+
+return(coverage)
+  
+}
+
+
 # B. Covariance
 
 # i. Sample covariance
@@ -203,12 +286,14 @@ cov_within_two_years <- function(df, yr1, yr2) {
     return()
 }
 
+
 # c. Root MSE
 root_MSE <- function(df) {
   mean((df$suicides_no_org - df$suicides_no)^2) %>% 
     sqrt() %>% 
     return()
 }
+
 
 # SIMULATION --------------------------------------------------------------
 
