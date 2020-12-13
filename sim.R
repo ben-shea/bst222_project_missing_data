@@ -161,62 +161,82 @@ var_within_yr <- function(df) {
 }
 
 # ii. Delta method variance
-# augment_missing <- function(df){
-#   df <- df %>% mutate(I = ifelse(is.na(suicides_no), 0, 1) )
-#   df$suicides_no[which(is.na(df$suicides_no))] <- 0
+
+
+# calc_true_perc_change <- function(data){
 #   
-#   year_means <- df %>% group_by(year, gdp_quartile) %>% summarise(
-#                       tot_suicide =sum(suicides_no), 
-#                       tot_I = sum(I), 
-#                       n = n())
-#   year_means <- year_means %>% mutate(avg_suicide = tot_suicide/n,
-#                                       avg_I = tot_I/n)
-#   return(year_means %>% select(c(year, gdp_quartile, avg_suicide, avg_I)))
-#     
+#   df <- data %>% group_by(year) %>% summarise(avg = mean(suicides_no)) %>%
+#         mutate(perc_change =(avg - lag(avg)) / lag(avg) )
 #   
+#   df %>% drop_na() %>% pull(perc_change) %>% return()
 # }
 
-delta_var_diff <- function(df, yr1, yr2){
+# calculate confidence interval coverage
+# for % change across all pairs of years (e.g. 1985 & 1986,
+# 1986 * 1987)
+delta_ci_all_years <- function(df_impute, data_true){
   # df -> imputed data frame
 
-  # implementation of formula (4)
-  calc_stats <- function(df, yr1, yr2){
-    year_stats <- df %>% filter(year %in% c(yr1, yr2)) %>% group_by(year) %>%
+  # implementation of formula (4) - pairwise year stats
+  calc_stats <- function(df_impute, yr1, yr2){
+    
+    # limit to countries present in both yr1 & yr2 for covar calc
+    df1 <- df_impute %>% filter(year == yr1)
+    df2 <- df_impute %>% filter(year == yr2)
+    common <- df1 %>% inner_join(df2, by = c('country')) %>% select(country)
+    
+    year_stats <- df_impute %>% filter((year %in% c(yr1, yr2)) &
+                                (country %in% common$country)) %>% group_by(year) %>%
                          summarise(y_bar = mean(suicides_no),
                                    y_var = var(suicides_no),
                                    n = n())
-    year_stats['xy_cov'] = cov(subset(data, year == yr1)$suicides_no,
-                                   subset(data, year == yr2)$suicides_no)
-    
     year_stats['x_bar'] = year_stats$y_bar[1] #yr1
     year_stats['x_var'] = year_stats$y_var[1] #yr1
+    
+    x <- df_impute %>% filter(country %in% common$country & year == yr1) %>% pull(suicides_no)
+    y <- df_impute %>% filter(country %in% common$country & year == yr2) %>% pull(suicides_no)
+    
+    year_stats['xy_cov'] = cov(x,y)
+    
+    avgs <- data_true %>% filter(country %in% common$country &
+                                   year %in% c(yr1, yr2)) %>% 
+                          group_by(year) %>% 
+                          summarise(avg = mean(suicides_no)) 
+    year_stats['true_val'] = (avgs[2, 'avg']$avg - avgs[1, 'avg']$avg)/(avgs[1, 'avg']$avg)
+                             
+    
     
     return(year_stats[2,])
     
   }
   
-  calc_ci_ratio <- function(stats){
+  # confidence interval coverage for percent change estimator based on delta method (Eq 4)
+  calc_ci_cov <- function(stats){
         se <- sqrt((stats$y_var - 
               2*stats$y_bar/stats$x_bar*stats$xy_cov + 
               (stats$y_bar**2/stats$x_bar**2)*stats$x_var))/(sqrt(stats$n)*stats$x_bar)
-        low <- stats$y_bar/stats$x_bar - 1.96*se
-        up <- stats$y_bar/stats$x_bar  + 1.96*se
-        ci<- c(low, up)
-        return(ci)
+        low <- stats$y_bar/stats$x_bar - 1 -1.96*se
+        up <- stats$y_bar/stats$x_bar  -1 + 1.96*se
+        
+        return(ifelse(stats$true_val >= low & 
+                      stats$true_val <= up, 1, 0))
+      
   }
   
+# loop through all pairs of years to calc coverage
   
-  calc_ci_ratio2 <- function(stats){
-    se <- sqrt((stats$y_var - 
-                  2*stats$y_bar/stats$x_bar*stats$xy_cov + 
-                  (stats$y_bar**2/stats$x_bar**2)*stats$x_var))/(sqrt(stats$n)*stats$x_bar)
-    low <- stats$y_bar/stats$x_bar - 1.96*se
-    up <- stats$y_bar/stats$x_bar + 1.96*se
-    ci<- c(low, up)
-    return(ci)
+yr1 <- min(df$year):(max(df$year)-1)   
+yr2 <- (min(df$year)+1):max(df$year)   
+
+coverage = c()
+
+for(i in 1:(length(yr1))){
+  s <- calc_stats(df, yr1[i], yr2[i])
+  coverage <- append(coverage, calc_ci_cov(s))
+  
   }
-  
-  
+
+return(coverage)
   
 }
 
