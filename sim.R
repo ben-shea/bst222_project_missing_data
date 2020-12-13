@@ -275,6 +275,88 @@ return(sum(coverage)/length(coverage))
 }
 
 
+delta_ci_all_years2 <- function(df_impute, data_true = data){
+  # df -> imputed data frame
+  df_impute <- df_impute %>% as.data.table()
+  data_true <- data_true %>% as.data.table()
+  # implementation of formula (4) - pairwise year stats
+  calc_stats <- function(df_impute, yr1, yr2){
+    
+    # limit to countries present in both yr1 & yr2 for covar calc
+    df1 <- df_impute[year == yr1, ]
+    df2 <- df_impute[year == yr2, ]
+    setkey(df1, 'country')
+    setkey(df2, 'country')
+    common <- df1 %>% inner_join(df2, by = c('country')) %>% select(country)
+    
+    df_impute <- df_impute %>% as.data.table()
+    year_stats <- df_impute[(year %in% c(yr1, yr2)) &
+                              (country %in% common$country), ]
+    year_stats <- year_stats[, c("y_bar", "y_var", "n"):=list(mean(suicides_no), var(suicides_no), .N), by = .(year)]
+    
+    # year_stats <- df_impute %>% filter((year %in% c(yr1, yr2)) &
+    #                                      (country %in% common$country)) %>% group_by(year) %>%
+    #   summarise(y_bar = mean(suicides_no),
+    #             y_var = var(suicides_no),
+    #             n = n(), .groups = "drop") 
+    year_stats['x_bar'] = year_stats$y_bar[1] #yr1
+    year_stats['x_var'] = year_stats$y_var[1] #yr1
+    
+    x <- df_impute[country %in% common$country & year == yr1, suicides_no]
+    y <- df_impute[country %in% common$country & year == yr2, suicides_no]
+    
+    year_stats['xy_cov'] = cov(x,y)
+    
+    data_true <- data_true %>% as.data.table()
+    
+    avgs <- data_true[country %in% common$country &
+                        year %in% c(yr1, yr2), avg = mean(suicides_no), by = year]
+    
+    # avgs <- data_true %>% filter(country %in% common$country &
+    #                                year %in% c(yr1, yr2)) %>% 
+    #   group_by(year) %>% 
+    #   summarise(avg = mean(suicides_no), .groups = "drop") 
+    
+    
+    year_stats['true_val'] = (avgs[2, 'avg']$avg - avgs[1, 'avg']$avg)/(avgs[1, 'avg']$avg)
+    
+    
+    
+    return(year_stats[2,])
+    
+  }
+  
+  # confidence interval coverage for percent change estimator based on delta method (Eq 4)
+  calc_ci_cov <- function(stats){
+    se <- sqrt((stats$y_var - 
+                  2*stats$y_bar/stats$x_bar*stats$xy_cov + 
+                  (stats$y_bar**2/stats$x_bar**2)*stats$x_var))/(sqrt(stats$n)*stats$x_bar)
+    low <- stats$y_bar/stats$x_bar - 1 -1.96*se
+    up <- stats$y_bar/stats$x_bar  -1 + 1.96*se
+    
+    return(ifelse(stats$true_val >= low & 
+                    stats$true_val <= up, 1, 0))
+    
+  }
+  
+  # loop through all pairs of years to calc coverage
+  
+  yr1 <- min(df_impute$year):(max(df_impute$year)-1)   
+  yr2 <- (min(df_impute$year)+1):max(df_impute$year)   
+  
+  coverage = c()
+  
+  for(i in 1:(length(yr1))){
+    s <- calc_stats(df_impute, yr1[i], yr2[i])
+    coverage <- c(coverage, calc_ci_cov(s))
+    
+  }
+  # Returns proportion of ratios for which the Delta CI captured the true value
+  return(sum(coverage)/length(coverage))
+  
+}  
+
+
 # B. Covariance
 
 # i. Sample covariance
@@ -448,10 +530,11 @@ sim <- function(N = 10, perc_missing = 0.25) {
 
 ### RUN SIMULATION 
 # 50 
-percs = seq(0.1, .6, by = 0.015)
+# percs = seq(0.1, .6, by = 0.015)
+percs = seq(0.1, .6, by = 0.03)
 
 system.time(
-  sim_output <- pmap(.l = list(.x = percs), .f = ~sim(perc_missing = .x, N = 50))
+  sim_output <- pmap(.l = list(.x = percs), .f = ~sim(perc_missing = .x, N = 5))
 )
 
 
@@ -492,8 +575,8 @@ p2 <- coverage_df %>%
   ggtitle("Simulation: Average Delta Method CI Coverage for Different Imputation Methods") + 
   theme_bw() 
 
-ggsave(p1,filename = "MSE_plot.png")
-ggsave(p2,filename = "Coverage_plot.png")
+ggsave(p1,filename = "MSE_plot_reduced.png")
+ggsave(p2,filename = "Coverage_plot_reduced.png")
 
 
-
+save(rmse_df, coverage_df, file = "data_sim_reduced.rda")
