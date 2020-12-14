@@ -114,10 +114,10 @@ mk_mar <- function(df, rows_to_rm, seed) {
 # i. Last value carried forward 
 lvcf <- function(df) {
   df %>% 
-    arrange(country_year) %>% 
-    group_by(year) %>% 
+    # arrange(country_year) %>% 
+    group_by(country) %>%
     na.locf %>% 
-    ungroup() %>% 
+    ungroup() %>%
     return()
 } 
 
@@ -156,7 +156,7 @@ glmm <- function(df){
   df <- df %>% mutate(scaled_year = scale(year),
                       scaled_gdp_per_capita = scale(gdp_per_capita))
   
-  missing_model_intercept <- lmer(suicides_no ~ scaled_year + scaled_gdp_per_capita+(1|country), data= df)
+  # missing_model_intercept <- lmer(suicides_no ~ scaled_year + scaled_gdp_per_capita+(1|country), data= df)
   missing_data_df <- df %>% filter(is.na(suicides_no))
   
   #generalized linear mixed model for random effect for intercept
@@ -184,10 +184,11 @@ hyper_tune_k <- function(train_set) {
 
 # a. KNN 1
 knn1 <- function(df) {
+  df <- df%>% mutate(country=as.numeric(as.factor(country)))
   df = df %>% filter(year != 2016)
   df$missing_ind <- is.na(df$suicides_no)*1
   df_train = df %>% filter(missing_ind==0) %>%
-    select(-c('country_year', 'suicides_no', 'suicides_no_org', 'missing_ind'))
+    select(-c('country_year',  'suicides_no_org', 'missing_ind'))
   df_test = df %>% filter(missing_ind==1)%>%
     select(-c('country_year', 'suicides_no', 'suicides_no_org', 'missing_ind'))
   df_knn = hyper_tune_k(df_train)
@@ -197,13 +198,14 @@ knn1 <- function(df) {
 
 # b. KNN 2 
 knn2 <- function(df) {
+  df <- df%>% mutate(country=as.numeric(as.factor(country)))
   df = df %>% filter(year != 2016)
   df$missing_ind <- is.na(df$suicides_no)*1
   previous_df = df %>% group_by('country') %>% filter(lead(missing_ind)==1) %>% 
-    mutate(year=year+1) %>% ungroup() %>% 
+    mutate(prev_suicides = suicides_no, year=year+1) %>% ungroup() %>% 
     select('country', 'year', 'prev_suicides')
   df_train = df %>% filter(missing_ind==0) %>%
-    select(-c('country_year', 'suicides_no', 'suicides_no_org', 'missing_ind'))
+    select(-c('country_year',  'suicides_no_org', 'missing_ind'))
   df_train = df_train %>% mutate(suicides_no = suicides_no-lag(suicides_no))
   df_test = df %>% filter(missing_ind==1)%>%
     select(-c('country_year', 'suicides_no', 'suicides_no_org', 'missing_ind'))
@@ -247,7 +249,7 @@ knn2 <- function(df) {
 # 1986 * 1987)
 delta_ci_all_years <- function(df_impute, data_true = data){
   # df -> imputed data frame
-
+  
   # implementation of formula (4) - pairwise year stats
   calc_stats <- function(df_impute, yr1, yr2){
     
@@ -257,10 +259,10 @@ delta_ci_all_years <- function(df_impute, data_true = data){
     common <- df1 %>% inner_join(df2, by = c('country')) %>% select(country)
     
     year_stats <- df_impute %>% filter((year %in% c(yr1, yr2)) &
-                                (country %in% common$country)) %>% group_by(year) %>%
-                         summarise(y_bar = mean(suicides_no),
-                                   y_var = var(suicides_no),
-                                   n = n(), .groups = "drop")
+                                         (country %in% common$country)) %>% group_by(year) %>%
+      summarise(y_bar = mean(suicides_no),
+                y_var = var(suicides_no),
+                n = n(), .groups = "drop")
     year_stats['x_bar'] = year_stats$y_bar[1] #yr1
     year_stats['x_var'] = year_stats$y_var[1] #yr1
     
@@ -271,10 +273,10 @@ delta_ci_all_years <- function(df_impute, data_true = data){
     
     avgs <- data_true %>% filter(country %in% common$country &
                                    year %in% c(yr1, yr2)) %>% 
-                          group_by(year) %>% 
-                          summarise(avg = mean(suicides_no), .groups = "drop") 
+      group_by(year) %>% 
+      summarise(avg = mean(suicides_no), .groups = "drop") 
     year_stats['true_val'] = (avgs[2, 'avg']$avg - avgs[1, 'avg']$avg)/(avgs[1, 'avg']$avg)
-                             
+    
     
     
     return(year_stats[2,])
@@ -283,33 +285,35 @@ delta_ci_all_years <- function(df_impute, data_true = data){
   
   # confidence interval coverage for percent change estimator based on delta method (Eq 4)
   calc_ci_cov <- function(stats){
-        se <- sqrt((stats$y_var - 
-              2*stats$y_bar/stats$x_bar*stats$xy_cov + 
-              (stats$y_bar**2/stats$x_bar**2)*stats$x_var))/(sqrt(stats$n)*stats$x_bar)
-        low <- stats$y_bar/stats$x_bar - 1 -1.96*se
-        up <- stats$y_bar/stats$x_bar  -1 + 1.96*se
-        
-        return(ifelse(stats$true_val >= low & 
-                      stats$true_val <= up, 1, 0))
-      
+    se <- sqrt((stats$y_var - 
+                  2*stats$y_bar/stats$x_bar*stats$xy_cov + 
+                  (stats$y_bar**2/stats$x_bar**2)*stats$x_var))/(sqrt(stats$n)*stats$x_bar)
+    low <- stats$y_bar/stats$x_bar - 1 -1.96*se
+    up <- stats$y_bar/stats$x_bar  -1 + 1.96*se
+    
+    return(ifelse(stats$true_val >= low & 
+                    stats$true_val <= up, 1, 0))
+    
   }
   
-# loop through all pairs of years to calc coverage
+  # loop through all pairs of years to calc coverage
   
-yr1 <- min(df_impute$year):(max(df_impute$year)-1)   
-yr2 <- (min(df_impute$year)+1):max(df_impute$year)   
-
-coverage = c()
-
-for(i in 1:(length(yr1))){
-  s <- calc_stats(df_impute, yr1[i], yr2[i])
-  coverage <- append(coverage, calc_ci_cov(s))
+  yr1 <- min(df_impute$year):(max(df_impute$year)-1)   
+  yr2 <- (min(df_impute$year)+1):max(df_impute$year)   
   
+  coverage = c()
+  
+  for(i in 1:(length(yr1))){
+    s <- calc_stats(df_impute, yr1[i], yr2[i])
+    # print(s)
+    coverage <- append(coverage, calc_ci_cov(s))
+    
   }
-# Returns proportion of ratios for which the Delta CI captured the true value
-return(sum(coverage)/length(coverage))
+  
+  return(coverage)
   
 }
+
 
 
 delta_ci_all_years2 <- function(df_impute, data_true = data){
@@ -415,6 +419,11 @@ root_MSE <- function(df) {
 
 
 # SIMULATION --------------------------------------------------------------
+country_crosswalk <- data %>% distinct(country)
+country_crosswalk <- country_crosswalk %>% 
+  mutate(
+    country_no = country %>% as.factor() %>% as.numeric()
+  )
 
 # Function to generate missing data, run imputation methods, compare them, and output summary  
 
@@ -447,6 +456,42 @@ sim <- function(N = 10, perc_missing = 0.25) {
     # Mean impute
     impute_mcar_mean <- mean_impute(mcar)
     impute_mar_mean <- mean_impute(mar)
+    
+    # KNN 1
+    impute_mcar_knn1 <- knn1(mcar)
+    # Fix country
+    impute_mcar_knn1 <- impute_mcar_knn1 %>% 
+      left_join(country_crosswalk, 
+                by = c("country" = "country_no")) %>% 
+      select(-country) %>% 
+      rename(country = country.y) 
+    
+    impute_mar_knn1 <- knn1(mar)
+    # Fix country
+    impute_mar_knn1 <- impute_mar_knn1 %>% 
+      left_join(country_crosswalk, 
+                by = c("country" = "country_no")) %>% 
+      select(-country) %>% 
+      rename(country = country.y) 
+    
+    
+    
+    
+    # KNN 2
+    impute_mcar_knn2 <- knn2(mcar)
+    # Fix country
+    impute_mcar_knn2 <- impute_mcar_knn2 %>% 
+      left_join(country_crosswalk, 
+                by = c("country" = "country_no")) %>% 
+      select(-country) %>% 
+      rename(country = country.y)
+    impute_mar_knn2 <- knn2(mar)
+    # Fix country
+    impute_mar_knn2 <- impute_mar_knn2 %>% 
+      left_join(country_crosswalk, 
+                by = c("country" = "country_no")) %>% 
+      select(-country) %>% 
+      rename(country = country.y) 
     
     # Get Root MSE
     root_mse <-  bind_rows(root_mse,
@@ -495,6 +540,36 @@ sim <- function(N = 10, perc_missing = 0.25) {
                              missing_type = "MAR",
                              rmse = root_MSE(impute_mar_mean)
                            ),
+                          # KNN1
+                          data.frame(
+                            sim_run = perc_missing,
+                            ind = i,
+                            impute_type = "KNN - Absolute Rate",
+                            missing_type = "MCAR",
+                            rmse = root_MSE(impute_mcar_knn1)
+                          ),
+                          data.frame(
+                            sim_run = perc_missing,
+                            ind = i,
+                            impute_type = "KNN - Absolute Rate",
+                            missing_type = "MAR",
+                            rmse = root_MSE(impute_mar_knn1)
+                          ),
+                          # KNN2
+                          data.frame(
+                            sim_run = perc_missing,
+                            ind = i,
+                            impute_type = "KNN - Delta Change Rate",
+                            missing_type = "MCAR",
+                            rmse = root_MSE(impute_mcar_knn2)
+                          ),
+                          data.frame(
+                            sim_run = perc_missing,
+                            ind = i,
+                            impute_type = "KNN - Delta Change Rate",
+                            missing_type = "MAR",
+                            rmse = root_MSE(impute_mar_knn2)
+                          )
                            )
     
   
@@ -546,6 +621,36 @@ sim <- function(N = 10, perc_missing = 0.25) {
                            impute_type = "Mean Imputation",
                            missing_type = "MAR",
                            coverage = delta_ci_all_years(impute_mar_mean, data)
+                           ),
+                           # KNN 1
+                           data.frame(
+                             sim_run = perc_missing,
+                             ind = i,
+                             impute_type = "KNN - Absolute Rate",
+                             missing_type = "MCAR",
+                             coverage = delta_ci_all_years(impute_mcar_knn1, data)
+                           ),
+                           data.frame(
+                             sim_run = perc_missing,
+                             ind = i,
+                             impute_type = "KNN - Absolute Rate",
+                             missing_type = "MAR",
+                             coverage = delta_ci_all_years(impute_mar_knn1, data)
+                             ),
+                             # KNN 2
+                             data.frame(
+                               sim_run = perc_missing,
+                               ind = i,
+                               impute_type = "KNN - Delta Change Rate",
+                               missing_type = "MCAR",
+                               coverage = delta_ci_all_years(impute_mcar_knn2, data)
+                             ),
+                             data.frame(
+                               sim_run = perc_missing,
+                               ind = i,
+                               impute_type = "KNN - Delta Change Rate",
+                               missing_type = "MAR",
+                               coverage = delta_ci_all_years(impute_mar_knn2, data)
                          )
   )
   }
@@ -569,15 +674,30 @@ sim <- function(N = 10, perc_missing = 0.25) {
 # 50 
 # percs = seq(0.1, .6, by = 0.015)
 percs = seq(0.1, .6, by = 0.03)
+# percs = c(0.1, 0.2, 0.3)
+
+# system.time(
+#   sim_output <- pmap(.l = list(.x = percs), .f = ~sim(perc_missing = .x, N = 1))
+# )
+# user  system elapsed 
+# 81.447   5.153  86.615 
 
 system.time(
-  sim_output <- pmap(.l = list(.x = percs), .f = ~sim(perc_missing = .x, N = 5))
+  sim_output2 <- parallel::mclapply(percs, function(x) return(sim(perc_missing = x, N = 15)), mc.cores = 4)
 )
+
+# compare sim_output to sim_output2
+
+# user  system elapsed
+# 53.284   4.350  32.097
+
+# user   system  elapsed 
+# 5255.374  304.693 3400.270 
 
 
 #### Plot RMSE
 # Combine data into one data frame
-rmse_df <- sim_output %>% 
+rmse_df <- sim_output2 %>% 
   # Extract the MSE output for percent missing
   map(function(x) return(x[[2]])) %>% 
   # Row bind these together
@@ -586,7 +706,7 @@ rmse_df <- sim_output %>%
 p1 <- rmse_df %>% 
   ggplot(aes(x = sim_run, y = avg_rmse, color = impute_type)) +
   geom_line() +
-  scale_color_manual("Imputation Type", values = RColorBrewer::brewer.pal(3, "Accent")) +
+  scale_color_manual("Imputation Type", values = RColorBrewer::brewer.pal(6, "Set1")) +
   facet_grid(missing_type ~ .) +
   xlab("% of Data Missing") + 
   ylab("Average Root MSE") + 
@@ -596,7 +716,7 @@ p1 <- rmse_df %>%
 
 #### Plot Delta CI
 # Combine data into one data frame
-coverage_df <- sim_output %>% 
+coverage_df <- sim_output2 %>% 
   # Extract the MSE output for percent missing
   map(function(x) return(x[[1]])) %>% 
   # Row bind these together
@@ -605,15 +725,29 @@ coverage_df <- sim_output %>%
 p2 <- coverage_df %>% 
   ggplot(aes(x = sim_run, y = avg_coverage, color = impute_type)) +
   geom_line() +
-  scale_color_manual("Imputation Type", values = RColorBrewer::brewer.pal(3, "Accent")) +
+  scale_color_manual("Imputation Type", values = RColorBrewer::brewer.pal(5, "Set1")) +
   facet_grid(missing_type ~ .) +
   xlab("% of Data Missing") + 
   ylab("Average 95% Delta Method CI Coverage") + 
   ggtitle("Simulation: Average Delta Method CI Coverage for Different Imputation Methods") + 
   theme_bw() 
 
-ggsave(p1,filename = "MSE_plot_reduced.png")
-ggsave(p2,filename = "Coverage_plot_reduced.png")
+# ggsave(p1,filename = "MSE_plot_reduced.png")
+# ggsave(p2,filename = "Coverage_plot_reduced.png")
 
+ggsave(p1,filename = "MSE_plot_final.png")
+ggsave(p2,filename = "Coverage_plot_final.png")
 
-save(rmse_df, coverage_df, file = "data_sim_reduced.rda")
+save(rmse_df, coverage_df, file = "data_sim_final.rda")
+# save(rmse_df, coverage_df, file = "data_sim_reduced_knn.rda")
+# save(rmse_df, coverage_df, file = "data_sim_reduced.rda")
+
+# load("data_sim_knn.rda")
+# rmse_df_rf <- rmse_df
+# coverage_df_rf <- coverage_df
+# load("data_sim_reduced.rda")
+# 
+# 
+# rmse_df <- bind_rows(rmse_df, rmse_df_rf)
+# 
+# coverage_df <- bind_rows(coverage_df, coverage_df_rf)
